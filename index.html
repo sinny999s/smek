@@ -147,16 +147,16 @@
         gridPlane.position.y = -0.5;
         scene.add(gridPlane);
 
-        // --- Bounding Walls (NEW) ---
+        // --- Bounding Walls ---
         const wallHeight = 2;
         const wallThickness = 0.5;
         const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, roughness: 0.1, metalness: 0.1 });
         
         const wallPositions = [
-            { x: 0, z: -halfGrid, scaleX: gridSize + wallThickness, scaleZ: wallThickness }, // Top
-            { x: 0, z: halfGrid, scaleX: gridSize + wallThickness, scaleZ: wallThickness },  // Bottom
-            { x: -halfGrid, z: 0, scaleX: wallThickness, scaleZ: gridSize + wallThickness }, // Left
-            { x: halfGrid, z: 0, scaleX: wallThickness, scaleZ: gridSize + wallThickness }   // Right
+            { x: 0, z: -halfGrid, scaleX: gridSize + wallThickness, scaleZ: wallThickness },
+            { x: 0, z: halfGrid, scaleX: gridSize + wallThickness, scaleZ: wallThickness },
+            { x: -halfGrid, z: 0, scaleX: wallThickness, scaleZ: gridSize + wallThickness },
+            { x: halfGrid, z: 0, scaleX: wallThickness, scaleZ: gridSize + wallThickness }
         ];
         
         wallPositions.forEach(pos => {
@@ -207,12 +207,11 @@
             }
 
             const leaderboard = document.getElementById('leaderboard');
-            leaderboard.innerHTML = ''; // Clear old leaderboard
+            leaderboard.innerHTML = '';
 
             for (const id in gameState.players) {
                 const player = gameState.players[id];
                 
-                // Update Leaderboard
                 const entry = document.createElement('div');
                 entry.className = 'leaderboard-entry';
                 const colorBox = `<div class="player-color-box" style="background-color: ${player.color};"></div>`;
