@@ -49,51 +49,12 @@
             margin-right: 10px;
             vertical-align: middle;
         }
-        #gameOverScreen {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            padding: 40px;
-            background-color: rgba(0, 0, 0, 0.85);
-            border: 2px solid #ff00ff;
-            border-radius: 15px;
-            text-align: center;
-            display: none;
-            font-size: 28px;
-            text-shadow: 0 0 10px #ff00ff;
-            pointer-events: auto;
-        }
-        #gameOverScreen h2 {
-            margin: 0 0 20px 0;
-            font-size: 48px;
-            color: #ff00ff;
-        }
-        #restartButton {
-            padding: 10px 20px;
-            font-size: 24px;
-            background-color: #ff00ff;
-            color: #000;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        #restartButton:hover {
-            background-color: #fff;
-            box-shadow: 0 0 20px #ff00ff;
-        }
     </style>
 </head>
 <body>
     <div id="ui-container">
         <div id="score">Score: 0</div>
         <div id="leaderboard"></div>
-        <div id="gameOverScreen">
-            <h2>GAME OVER</h2>
-            <p>Final Score: <span id="finalScore">0</span></p>
-            <button id="restartButton">Restart</button>
-        </div>
     </div>
 
     <script type="importmap">
@@ -240,10 +201,15 @@
                 
                 if (id == myId) {
                     document.getElementById('score').innerText = `Score: ${player.score}`;
+                    // If the server says we are dead, but we don't know it yet
                     if (player.isDead && !isDead) {
                         isDead = true;
-                        document.getElementById('finalScore').innerText = player.score;
-                        document.getElementById('gameOverScreen').style.display = 'block';
+                        // Automatically send a restart request
+                        ws.send(JSON.stringify({ type: 'restart_game' }));
+                    }
+                    // If the server says we are alive, but we think we are dead (after respawn)
+                    if (!player.isDead && isDead) {
+                        isDead = false;
                     }
                 }
             }
@@ -270,12 +236,6 @@
             }
         });
         
-        document.getElementById('restartButton').addEventListener('click', () => {
-            ws.send(JSON.stringify({ type: 'restart_game' }));
-            document.getElementById('gameOverScreen').style.display = 'none';
-            isDead = false;
-        });
-
         // --- Camera & Rendering ---
         camera.position.set(0, 18, 14);
         const controls = new OrbitControls(camera, renderer.domElement);
@@ -287,7 +247,6 @@
             requestAnimationFrame(animate);
             const delta = clock.getDelta();
 
-            // Smooth interpolation for all objects
             for (const id in playerMeshes) {
                 playerMeshes[id].forEach(segment => {
                     if (segment.userData.targetPosition) {
