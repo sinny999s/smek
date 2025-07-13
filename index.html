@@ -51,7 +51,7 @@
         const playerMeshes = {}; // Store all player snake meshes here
 
         // --- WebSocket Connection ---
-        // This now points to your live Render server.
+        // IMPORTANT: Remember to replace this with your live Render URL.
         const ws = new WebSocket('wss://sinny-snake-server.onrender.com');
         let myId = null;
 
@@ -75,7 +75,6 @@
                 // --- Update Snakes ---
                 const receivedPlayerIds = Object.keys(gameState.players);
                 
-                // Remove disconnected players' meshes
                 for(const existingId in playerMeshes) {
                     if (!receivedPlayerIds.includes(existingId)) {
                         playerMeshes[existingId].forEach(segment => scene.remove(segment));
@@ -83,7 +82,6 @@
                     }
                 }
 
-                // Update or create player snakes
                 for (const id in gameState.players) {
                     const player = gameState.players[id];
                     
