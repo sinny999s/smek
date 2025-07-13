@@ -34,6 +34,7 @@
             border-radius: 10px;
             border: 1px solid #00ffff;
             text-align: right;
+            min-width: 200px;
         }
         .leaderboard-entry {
             display: flex;
@@ -116,14 +117,13 @@
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setClearColor(0x000000);
         document.body.appendChild(renderer.domElement);
 
         // --- Post-Processing ---
         const renderScene = new RenderPass(scene, camera);
         const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
         bloomPass.threshold = 0;
-        bloomPass.strength = 1.5;
+        bloomPass.strength = 1.2;
         bloomPass.radius = 0.5;
         const composer = new EffectComposer(renderer);
         composer.addPass(renderScene);
@@ -138,10 +138,9 @@
 
         // --- Game Board ---
         const gridSize = 20;
-        const halfGrid = gridSize / 2;
         const gridPlane = new THREE.Mesh(
-            new THREE.PlaneGeometry(gridSize, gridSize),
-            new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8, metalness: 0.2 })
+            new THREE.PlaneGeometry(gridSize, gridSize, gridSize, gridSize),
+            new THREE.MeshStandardMaterial({ color: 0x1A1A1A, roughness: 0.8, metalness: 0.2 })
         );
         gridPlane.rotation.x = -Math.PI / 2;
         gridPlane.position.y = -0.5;
@@ -150,13 +149,13 @@
         // --- Bounding Walls ---
         const wallHeight = 2;
         const wallThickness = 0.5;
-        const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, roughness: 0.1, metalness: 0.1 });
+        const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.3 });
         
         const wallPositions = [
-            { x: 0, z: -halfGrid, scaleX: gridSize + wallThickness, scaleZ: wallThickness },
-            { x: 0, z: halfGrid, scaleX: gridSize + wallThickness, scaleZ: wallThickness },
-            { x: -halfGrid, z: 0, scaleX: wallThickness, scaleZ: gridSize + wallThickness },
-            { x: halfGrid, z: 0, scaleX: wallThickness, scaleZ: gridSize + wallThickness }
+            { x: 0, z: -gridSize/2, scaleX: gridSize + wallThickness, scaleZ: wallThickness },
+            { x: 0, z: gridSize/2, scaleX: gridSize + wallThickness, scaleZ: wallThickness },
+            { x: -gridSize/2, z: 0, scaleX: wallThickness, scaleZ: gridSize + wallThickness },
+            { x: gridSize/2, z: 0, scaleX: wallThickness, scaleZ: gridSize + wallThickness }
         ];
         
         wallPositions.forEach(pos => {
@@ -165,21 +164,15 @@
             scene.add(wall);
         });
 
-        // --- Starfield Background ---
-        const starGeometry = new THREE.BufferGeometry();
+        // --- Starfield ---
+        const stars = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0x888888, size: 0.1 }));
         const starVertices = [];
-        for (let i = 0; i < 10000; i++) {
-            starVertices.push((Math.random() - 0.5) * 2000, (Math.random() - 0.5) * 2000, (Math.random() - 0.5) * 2000);
-        }
-        starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3));
-        const starMaterial = new THREE.PointsMaterial({ color: 0x888888, size: 0.1 });
-        const stars = new THREE.Points(starGeometry, starMaterial);
+        for (let i = 0; i < 10000; i++) starVertices.push(THREE.MathUtils.randFloatSpread(2000));
+        stars.geometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3));
         scene.add(stars);
 
         // --- Game Objects ---
-        const foodGeometry = new THREE.BoxGeometry(1, 1, 1);
-        const foodMaterial = new THREE.MeshStandardMaterial({ color: 0xff00ff, emissive: 0xff00ff, roughness: 0.2, metalness: 0.1 });
-        const foodMesh = new THREE.Mesh(foodGeometry, foodMaterial);
+        const foodMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0xff00ff, emissive: 0xff00ff }));
         scene.add(foodMesh);
         
         const playerMeshes = {};
@@ -196,7 +189,7 @@
         };
 
         function updateGameState(gameState) {
-            foodMesh.position.copy(gameState.food);
+            foodMesh.userData.targetPosition = new THREE.Vector3().copy(gameState.food);
             
             const receivedPlayerIds = Object.keys(gameState.players);
             for(const existingId in playerMeshes) {
@@ -215,8 +208,7 @@
                 const entry = document.createElement('div');
                 entry.className = 'leaderboard-entry';
                 const colorBox = `<div class="player-color-box" style="background-color: ${player.color};"></div>`;
-                const name = (id == myId) ? 'You' : `Player ${Math.floor(player.id % 1000)}`;
-                entry.innerHTML = `<span>${colorBox}${name}</span><span>${player.score}</span>`;
+                entry.innerHTML = `<span>${colorBox}${player.name}</span><span>${player.score}</span>`;
                 leaderboard.appendChild(entry);
                 
                 if (!playerMeshes[id]) playerMeshes[id] = [];
@@ -224,37 +216,24 @@
                 const meshArray = playerMeshes[id];
                 const snakeData = player.snake;
 
-                if (meshArray.length === 0 && snakeData.length > 0) {
-                     for(let i = 0; i < snakeData.length; i++) {
-                        const geometry = new THREE.BoxGeometry(1, 1, 1);
-                        const material = new THREE.MeshStandardMaterial({ color: player.color, emissive: player.color, roughness: 0.2, metalness: 0.1 });
-                        const segment = new THREE.Mesh(geometry, material);
-                        segment.position.copy(snakeData[i]);
-                        meshArray.push(segment);
-                        scene.add(segment);
-                     }
+                if (player.isDead && meshArray.length > 0) {
+                    createParticleEffect(meshArray[0].position, player.color, 100);
+                    meshArray.forEach(segment => scene.remove(segment));
+                    playerMeshes[id] = [];
                 }
 
                 while (meshArray.length < snakeData.length) {
-                    const geometry = new THREE.BoxGeometry(1, 1, 1);
-                    const material = new THREE.MeshStandardMaterial({ color: player.color, emissive: player.color, roughness: 0.2, metalness: 0.1 });
-                    const segment = new THREE.Mesh(geometry, material);
-                    if (meshArray.length > 0) {
-                        segment.position.copy(meshArray[meshArray.length - 1].position);
-                    }
+                    const material = new THREE.MeshStandardMaterial({ color: player.color, emissive: player.color });
+                    const segment = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material);
+                    if (meshArray.length > 0) segment.position.copy(meshArray[meshArray.length - 1].position);
+                    else segment.position.copy(snakeData[0]);
                     meshArray.push(segment);
                     scene.add(segment);
-                }
-                while (meshArray.length > snakeData.length) {
-                    const segmentToRemove = meshArray.pop();
-                    scene.remove(segmentToRemove);
                 }
                 
                 for (let i = 0; i < snakeData.length; i++) {
                     if (meshArray[i]) {
-                         if (!meshArray[i].userData.targetPosition) {
-                            meshArray[i].userData.targetPosition = new THREE.Vector3();
-                         }
+                         if (!meshArray[i].userData.targetPosition) meshArray[i].userData.targetPosition = new THREE.Vector3();
                          meshArray[i].userData.targetPosition.copy(snakeData[i]);
                     }
                 }
@@ -291,7 +270,6 @@
             }
         });
         
-        // --- UI Events ---
         document.getElementById('restartButton').addEventListener('click', () => {
             ws.send(JSON.stringify({ type: 'restart_game' }));
             document.getElementById('gameOverScreen').style.display = 'none';
@@ -309,13 +287,16 @@
             requestAnimationFrame(animate);
             const delta = clock.getDelta();
 
+            // Smooth interpolation for all objects
             for (const id in playerMeshes) {
-                const meshArray = playerMeshes[id];
-                for (const segment of meshArray) {
+                playerMeshes[id].forEach(segment => {
                     if (segment.userData.targetPosition) {
-                        segment.position.lerp(segment.userData.targetPosition, delta * 15);
+                        segment.position.lerp(segment.userData.targetPosition, delta * 20);
                     }
-                }
+                });
+            }
+            if(foodMesh.userData.targetPosition) {
+                foodMesh.position.lerp(foodMesh.userData.targetPosition, delta * 20);
             }
 
             stars.rotation.y += 0.0001;
@@ -323,6 +304,59 @@
             composer.render();
         }
         animate();
+
+        // --- Particle Effect ---
+        function createParticleEffect(position, color, count) {
+            const particleMaterial = new THREE.PointsMaterial({
+                color: color,
+                size: 0.2,
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+
+            const particlesGeometry = new THREE.BufferGeometry();
+            const particles = [];
+            for (let i = 0; i < count; i++) {
+                const particle = new THREE.Vector3(
+                    position.x + (Math.random() - 0.5) * 0.5,
+                    position.y + (Math.random() - 0.5) * 0.5,
+                    position.z + (Math.random() - 0.5) * 0.5
+                );
+                particle.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 2,
+                    (Math.random() - 0.5) * 2,
+                    (Math.random() - 0.5) * 2
+                );
+                particles.push(particle);
+            }
+            
+            const particlePositions = particles.flatMap(p => [p.x, p.y, p.z]);
+            particlesGeometry.setAttribute('position', new THREE.Float32BufferAttribute(particlePositions, 3));
+            
+            const particleSystem = new THREE.Points(particlesGeometry, particleMaterial);
+            scene.add(particleSystem);
+
+            let life = 1.0;
+            function updateParticles() {
+                if (life <= 0) {
+                    scene.remove(particleSystem);
+                    return;
+                }
+                life -= 0.02;
+                particleSystem.material.opacity = life;
+                const positions = particleSystem.geometry.attributes.position.array;
+                for(let i = 0; i < particles.length; i++) {
+                    particles[i].add(particles[i].velocity.clone().multiplyScalar(0.02));
+                    positions[i * 3] = particles[i].x;
+                    positions[i * 3 + 1] = particles[i].y;
+                    positions[i * 3 + 2] = particles[i].z;
+                }
+                particleSystem.geometry.attributes.position.needsUpdate = true;
+                requestAnimationFrame(updateParticles);
+            }
+            updateParticles();
+        }
 
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
