@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Neon Snake 3D</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; cursor: none; }
         canvas { display: block; }
         #ui-container {
             position: absolute;
@@ -61,17 +61,20 @@
         {
             "imports": {
                 "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+                "tone": "https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.js"
             }
         }
     </script>
 
     <script type="module">
         import * as THREE from 'three';
+        import * as Tone from 'tone';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { AfterimagePass } from 'three/addons/postprocessing/AfterimagePass.js';
 
         // --- Basic Setup ---
         const scene = new THREE.Scene();
@@ -81,14 +84,17 @@
         document.body.appendChild(renderer.domElement);
 
         // --- Post-Processing ---
-        const renderScene = new RenderPass(scene, camera);
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
         const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
         bloomPass.threshold = 0;
         bloomPass.strength = 1.2;
         bloomPass.radius = 0.5;
-        const composer = new EffectComposer(renderer);
-        composer.addPass(renderScene);
         composer.addPass(bloomPass);
+        const afterimagePass = new AfterimagePass();
+        afterimagePass.uniforms['damp'].value = 0.8;
+        composer.addPass(afterimagePass);
+
 
         // --- Lighting ---
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -108,19 +114,15 @@
         scene.add(gridPlane);
 
         // --- Bounding Walls ---
-        const wallHeight = 2;
-        const wallThickness = 0.5;
-        const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.3 });
-        
+        const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, transparent: true, opacity: 0.3 });
         const wallPositions = [
-            { x: 0, z: -gridSize/2, scaleX: gridSize + wallThickness, scaleZ: wallThickness },
-            { x: 0, z: gridSize/2, scaleX: gridSize + wallThickness, scaleZ: wallThickness },
-            { x: -gridSize/2, z: 0, scaleX: wallThickness, scaleZ: gridSize + wallThickness },
-            { x: gridSize/2, z: 0, scaleX: wallThickness, scaleZ: gridSize + wallThickness }
+            { x: 0, z: -gridSize/2, scaleX: gridSize, scaleZ: 0.1 },
+            { x: 0, z: gridSize/2, scaleX: gridSize, scaleZ: 0.1 },
+            { x: -gridSize/2, z: 0, scaleX: 0.1, scaleZ: gridSize },
+            { x: gridSize/2, z: 0, scaleX: 0.1, scaleZ: gridSize }
         ];
-        
         wallPositions.forEach(pos => {
-            const wall = new THREE.Mesh(new THREE.BoxGeometry(pos.scaleX, wallHeight, pos.scaleZ), wallMaterial);
+            const wall = new THREE.Mesh(new THREE.BoxGeometry(pos.scaleX, 2, pos.scaleZ), wallMaterial);
             wall.position.set(pos.x, 0, pos.z);
             scene.add(wall);
         });
@@ -131,6 +133,9 @@
         for (let i = 0; i < 10000; i++) starVertices.push(THREE.MathUtils.randFloatSpread(2000));
         stars.geometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3));
         scene.add(stars);
+
+        // --- Sound ---
+        const synth = new Tone.Synth().toDestination();
 
         // --- Game Objects ---
         const foodMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0xff00ff, emissive: 0xff00ff }));
@@ -149,6 +154,12 @@
         };
 
         function updateGameState(gameState) {
+            if(foodMesh.userData.targetPosition) {
+                if(!foodMesh.userData.targetPosition.equals(gameState.food)) {
+                    createParticleEffect(foodMesh.position, foodMesh.material.color, 30);
+                    synth.triggerAttackRelease("C5", "8n");
+                }
+            }
             foodMesh.userData.targetPosition = new THREE.Vector3().copy(gameState.food);
             
             const receivedPlayerIds = Object.keys(gameState.players);
@@ -176,16 +187,11 @@
                 const meshArray = playerMeshes[id];
                 const snakeData = player.snake;
 
-                // --- BUG FIX: Immediate visual feedback on death ---
                 if (player.isDead && meshArray.length > 0) {
                     createParticleEffect(meshArray[0].position, player.color, 100);
                     meshArray.forEach(segment => scene.remove(segment));
-                    playerMeshes[id] = []; // Clear the local mesh array
-                    if (id === myId) {
-                        // If it's our snake that died, send restart immediately
-                        ws.send(JSON.stringify({ type: 'restart_game' }));
-                    }
-                    continue; // Skip the rest of the logic for this dead player
+                    playerMeshes[id] = [];
+                    continue;
                 }
 
                 while (meshArray.length < snakeData.length) {
@@ -252,6 +258,13 @@
                 foodMesh.position.lerp(foodMesh.userData.targetPosition, delta * 20);
             }
 
+            if (myId && playerMeshes[myId] && playerMeshes[myId].length > 0) {
+                const headPos = playerMeshes[myId][0].position;
+                const targetPos = new THREE.Vector3(headPos.x, headPos.y + 10, headPos.z + 8);
+                camera.position.lerp(targetPos, delta * 2);
+                controls.target.lerp(headPos, delta * 2);
+            }
+
             stars.rotation.y += 0.0001;
             controls.update();
             composer.render();
@@ -260,53 +273,29 @@
 
         // --- Particle Effect ---
         function createParticleEffect(position, color, count) {
-            const particleMaterial = new THREE.PointsMaterial({
-                color: color,
-                size: 0.2,
-                transparent: true,
-                blending: THREE.AdditiveBlending,
-                depthWrite: false
-            });
-
-            const particlesGeometry = new THREE.BufferGeometry();
-            const particles = [];
+            const particles = new THREE.Group();
+            const particleMaterial = new THREE.MeshBasicMaterial({ color: color, blending: THREE.AdditiveBlending });
             for (let i = 0; i < count; i++) {
-                const particle = new THREE.Vector3(
-                    position.x + (Math.random() - 0.5) * 0.5,
-                    position.y + (Math.random() - 0.5) * 0.5,
-                    position.z + (Math.random() - 0.5) * 0.5
-                );
-                particle.velocity = new THREE.Vector3(
-                    (Math.random() - 0.5) * 2,
-                    (Math.random() - 0.5) * 2,
-                    (Math.random() - 0.5) * 2
-                );
-                particles.push(particle);
+                const particle = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), particleMaterial);
+                particle.position.copy(position);
+                particle.userData.velocity = new THREE.Vector3((Math.random() - 0.5), (Math.random() - 0.5), (Math.random() - 0.5)).normalize().multiplyScalar(Math.random() * 5);
+                particle.userData.life = 1;
+                particles.add(particle);
             }
-            
-            const particlePositions = particles.flatMap(p => [p.x, p.y, p.z]);
-            particlesGeometry.setAttribute('position', new THREE.Float32BufferAttribute(particlePositions, 3));
-            
-            const particleSystem = new THREE.Points(particlesGeometry, particleMaterial);
-            scene.add(particleSystem);
+            scene.add(particles);
 
-            let life = 1.0;
             function updateParticles() {
-                if (life <= 0) {
-                    scene.remove(particleSystem);
-                    return;
-                }
-                life -= 0.02;
-                particleSystem.material.opacity = life;
-                const positions = particleSystem.geometry.attributes.position.array;
-                for(let i = 0; i < particles.length; i++) {
-                    particles[i].add(particles[i].velocity.clone().multiplyScalar(0.02));
-                    positions[i * 3] = particles[i].x;
-                    positions[i * 3 + 1] = particles[i].y;
-                    positions[i * 3 + 2] = particles[i].z;
-                }
-                particleSystem.geometry.attributes.position.needsUpdate = true;
-                requestAnimationFrame(updateParticles);
+                let alive = false;
+                particles.children.forEach(p => {
+                    if (p.userData.life > 0) {
+                        alive = true;
+                        p.userData.life -= 0.02;
+                        p.position.add(p.userData.velocity.clone().multiplyScalar(0.02));
+                        p.scale.setScalar(p.userData.life);
+                    }
+                });
+                if (alive) requestAnimationFrame(updateParticles);
+                else scene.remove(particles);
             }
             updateParticles();
         }
