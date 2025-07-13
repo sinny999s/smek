@@ -51,8 +51,8 @@
         const playerMeshes = {}; // Store all player snake meshes here
 
         // --- WebSocket Connection ---
-        // IMPORTANT: We will replace 'localhost' with your live Render URL later.
-        const ws = new WebSocket('ws://localhost:8080');
+        // This now points to your live Render server.
+        const ws = new WebSocket('wss://sinny-snake-server.onrender.com');
         let myId = null;
 
         ws.onopen = () => {
