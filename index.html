@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer 3D Snake</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- Basic Setup ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x111111);
+        document.body.appendChild(renderer.domElement);
+
+        // --- Lighting ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+        const pointLight = new THREE.PointLight(0xffffff, 1);
+        pointLight.position.set(15, 15, 15);
+        scene.add(pointLight);
+
+        // --- Game Board ---
+        const gridSize = 20;
+        const gridHelper = new THREE.GridHelper(gridSize, gridSize, 0x444444, 0x444444);
+        gridHelper.position.y = -0.5;
+        scene.add(gridHelper);
+
+        // --- Game Objects (managed by the client for rendering) ---
+        const foodGeometry = new THREE.BoxGeometry(1, 1, 1);
+        const foodMaterial = new THREE.MeshLambertMaterial({ color: 0xff3333 });
+        const foodMesh = new THREE.Mesh(foodGeometry, foodMaterial);
+        scene.add(foodMesh);
+        
+        const playerMeshes = {}; // Store all player snake meshes here
+
+        // --- WebSocket Connection ---
+        // IMPORTANT: We will replace 'localhost' with your live Render URL later.
+        const ws = new WebSocket('ws://localhost:8080');
+        let myId = null;
+
+        ws.onopen = () => {
+            console.log('Connected to the server!');
+        };
+
+        ws.onmessage = (event) => {
+            const gameState = JSON.parse(event.data);
+
+            if (gameState.type === 'assign_id') {
+                myId = gameState.id;
+                console.log(`I am player ${myId}`);
+                return;
+            }
+
+            if (gameState.type === 'game_update') {
+                // --- Update Food ---
+                foodMesh.position.set(gameState.food.x, gameState.food.y, gameState.food.z);
+
+                // --- Update Snakes ---
+                const receivedPlayerIds = Object.keys(gameState.players);
+                
+                // Remove disconnected players' meshes
+                for(const existingId in playerMeshes) {
+                    if (!receivedPlayerIds.includes(existingId)) {
+                        playerMeshes[existingId].forEach(segment => scene.remove(segment));
+                        delete playerMeshes[existingId];
+                    }
+                }
+
+                // Update or create player snakes
+                for (const id in gameState.players) {
+                    const player = gameState.players[id];
+                    
+                    if (!playerMeshes[id]) {
+                        playerMeshes[id] = [];
+                    }
+
+                    const meshArray = playerMeshes[id];
+                    const snakeData = player.snake;
+
+                    while (meshArray.length < snakeData.length) {
+                        const geometry = new THREE.BoxGeometry(1, 1, 1);
+                        const material = new THREE.MeshLambertMaterial({ color: player.color });
+                        const segment = new THREE.Mesh(geometry, material);
+                        meshArray.push(segment);
+                        scene.add(segment);
+                    }
+                    while (meshArray.length > snakeData.length) {
+                        const segmentToRemove = meshArray.pop();
+                        scene.remove(segmentToRemove);
+                    }
+
+                    for (let i = 0; i < snakeData.length; i++) {
+                        meshArray[i].position.set(snakeData[i].x, snakeData[i].y, snakeData[i].z);
+                    }
+                }
+            }
+        };
+
+        // --- Controls ---
+        window.addEventListener('keydown', (event) => {
+            let direction;
+            switch (event.key) {
+                case 'ArrowUp': direction = { x: 0, y: 0, z: -1 }; break;
+                case 'ArrowDown': direction = { x: 0, y: 0, z: 1 }; break;
+                case 'ArrowLeft': direction = { x: -1, y: 0, z: 0 }; break;
+                case 'ArrowRight': direction = { x: 1, y: 0, z: 0 }; break;
+                default: return;
+            }
+            ws.send(JSON.stringify({ type: 'direction_change', direction: direction }));
+        });
+
+
+        // --- Camera & Rendering ---
+        camera.position.set(0, 20, 15);
+        camera.lookAt(0, 0, 0);
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // --- Handle Window Resize ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
