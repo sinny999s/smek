@@ -13,13 +13,15 @@
     <script type="importmap">
         {
             "imports": {
-                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
             }
         }
     </script>
 
     <script type="module">
         import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
         // --- Basic Setup ---
         const scene = new THREE.Scene();
@@ -30,11 +32,11 @@
         document.body.appendChild(renderer.domElement);
 
         // --- Lighting ---
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         scene.add(ambientLight);
-        const pointLight = new THREE.PointLight(0xffffff, 1);
-        pointLight.position.set(15, 15, 15);
-        scene.add(pointLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(5, 10, 7.5);
+        scene.add(dirLight);
 
         // --- Game Board ---
         const gridSize = 20;
@@ -42,38 +44,89 @@
         gridHelper.position.y = -0.5;
         scene.add(gridHelper);
 
-        // --- Game Objects (managed by the client for rendering) ---
+        // --- Game Objects ---
         const foodGeometry = new THREE.BoxGeometry(1, 1, 1);
         const foodMaterial = new THREE.MeshLambertMaterial({ color: 0xff3333 });
         const foodMesh = new THREE.Mesh(foodGeometry, foodMaterial);
         scene.add(foodMesh);
         
-        const playerMeshes = {}; // Store all player snake meshes here
+        const playerMeshes = {};
+
+        // --- Interpolation State ---
+        let serverStateBuffer = [];
+        const RENDER_DELAY = 100; // ms
 
         // --- WebSocket Connection ---
-        // IMPORTANT: Remember to replace this with your live Render URL.
         const ws = new WebSocket('wss://sinny-snake-server.onrender.com');
         let myId = null;
 
-        ws.onopen = () => {
-            console.log('Connected to the server!');
-        };
-
+        ws.onopen = () => console.log('Connected to the server!');
         ws.onmessage = (event) => {
             const gameState = JSON.parse(event.data);
-
             if (gameState.type === 'assign_id') {
                 myId = gameState.id;
                 console.log(`I am player ${myId}`);
                 return;
             }
-
             if (gameState.type === 'game_update') {
-                // --- Update Food ---
-                foodMesh.position.set(gameState.food.x, gameState.food.y, gameState.food.z);
+                // Instead of rendering immediately, we push the state to a buffer.
+                serverStateBuffer.push({timestamp: Date.now(), state: gameState});
+            }
+        };
 
-                // --- Update Snakes ---
-                const receivedPlayerIds = Object.keys(gameState.players);
+        // --- Controls ---
+        window.addEventListener('keydown', (event) => {
+            let direction;
+            switch (event.key.toLowerCase()) {
+                case 'arrowup': case 'w': direction = { x: 0, y: 0, z: -1 }; break;
+                case 'arrowdown': case 's': direction = { x: 0, y: 0, z: 1 }; break;
+                case 'arrowleft': case 'a': direction = { x: -1, y: 0, z: 0 }; break;
+                case 'arrowright': case 'd': direction = { x: 1, y: 0, z: 0 }; break;
+                default: return;
+            }
+            ws.send(JSON.stringify({ type: 'direction_change', direction: direction }));
+        });
+
+        // --- Camera & Rendering ---
+        camera.position.set(0, 15, 12);
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+
+            // --- Interpolation Logic ---
+            const renderTime = Date.now() - RENDER_DELAY;
+            
+            // Find the two server updates we want to interpolate between
+            let fromState = null;
+            let toState = null;
+            for(let i = serverStateBuffer.length - 1; i >= 0; i--) {
+                if(serverStateBuffer[i].timestamp <= renderTime) {
+                    fromState = serverStateBuffer[i];
+                    toState = serverStateBuffer[i+1];
+                    break;
+                }
+            }
+
+            // Clean up old states
+            if(serverStateBuffer.length > 20) {
+                serverStateBuffer.splice(0, serverStateBuffer.length - 20);
+            }
+
+            if(fromState && toState) {
+                const timeDiff = toState.timestamp - fromState.timestamp;
+                const renderDiff = renderTime - fromState.timestamp;
+                const t = Math.min(renderDiff / timeDiff, 1.0); // Interpolation factor (0.0 to 1.0)
+
+                // --- Update Food (can snap, doesn't need lerp) ---
+                foodMesh.position.set(fromState.state.food.x, fromState.state.food.y, fromState.state.food.z);
+
+                // --- Update Snakes with Interpolation ---
+                const receivedPlayerIds = Object.keys(fromState.state.players);
                 
                 for(const existingId in playerMeshes) {
                     if (!receivedPlayerIds.includes(existingId)) {
@@ -82,60 +135,47 @@
                     }
                 }
 
-                for (const id in gameState.players) {
-                    const player = gameState.players[id];
+                for (const id in fromState.state.players) {
+                    const playerFrom = fromState.state.players[id];
+                    const playerTo = toState.state.players[id];
+
+                    if (!playerTo) continue; // Skip if player doesn't exist in the next state
+
+                    if (!playerMeshes[id]) playerMeshes[id] = [];
                     
-                    if (!playerMeshes[id]) {
-                        playerMeshes[id] = [];
-                    }
-
                     const meshArray = playerMeshes[id];
-                    const snakeData = player.snake;
+                    const snakeDataFrom = playerFrom.snake;
+                    const snakeDataTo = playerTo.snake;
 
-                    while (meshArray.length < snakeData.length) {
+                    // Sync mesh array length
+                    while (meshArray.length < snakeDataFrom.length) {
                         const geometry = new THREE.BoxGeometry(1, 1, 1);
-                        const material = new THREE.MeshLambertMaterial({ color: player.color });
+                        const material = new THREE.MeshLambertMaterial({ color: playerFrom.color });
                         const segment = new THREE.Mesh(geometry, material);
                         meshArray.push(segment);
                         scene.add(segment);
                     }
-                    while (meshArray.length > snakeData.length) {
+                    while (meshArray.length > snakeDataFrom.length) {
                         const segmentToRemove = meshArray.pop();
                         scene.remove(segmentToRemove);
                     }
 
-                    for (let i = 0; i < snakeData.length; i++) {
-                        meshArray[i].position.set(snakeData[i].x, snakeData[i].y, snakeData[i].z);
+                    // Interpolate positions of all meshes
+                    for (let i = 0; i < meshArray.length; i++) {
+                        if(snakeDataFrom[i] && snakeDataTo[i]) {
+                            const fromPos = new THREE.Vector3(snakeDataFrom[i].x, snakeDataFrom[i].y, snakeDataFrom[i].z);
+                            const toPos = new THREE.Vector3(snakeDataTo[i].x, snakeDataTo[i].y, snakeDataTo[i].z);
+                            meshArray[i].position.lerpVectors(fromPos, toPos, t);
+                        }
                     }
                 }
             }
-        };
-
-        // --- Controls ---
-        window.addEventListener('keydown', (event) => {
-            let direction;
-            switch (event.key) {
-                case 'ArrowUp': direction = { x: 0, y: 0, z: -1 }; break;
-                case 'ArrowDown': direction = { x: 0, y: 0, z: 1 }; break;
-                case 'ArrowLeft': direction = { x: -1, y: 0, z: 0 }; break;
-                case 'ArrowRight': direction = { x: 1, y: 0, z: 0 }; break;
-                default: return;
-            }
-            ws.send(JSON.stringify({ type: 'direction_change', direction: direction }));
-        });
-
-
-        // --- Camera & Rendering ---
-        camera.position.set(0, 20, 15);
-        camera.lookAt(0, 0, 0);
-
-        function animate() {
-            requestAnimationFrame(animate);
+            
+            controls.update();
             renderer.render(scene, camera);
         }
         animate();
 
-        // --- Handle Window Resize ---
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
