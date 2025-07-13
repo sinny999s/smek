@@ -3,13 +3,72 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multiplayer 3D Snake</title>
+    <title>Neon Snake 3D</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #111; }
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
         canvas { display: block; }
+        #ui-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* Let mouse events pass through to the canvas */
+            color: white;
+        }
+        #score {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 32px;
+            text-shadow: 0 0 10px #fff, 0 0 20px #00ffff, 0 0 30px #00ffff;
+        }
+        #gameOverScreen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 40px;
+            background-color: rgba(0, 0, 0, 0.85);
+            border: 2px solid #ff00ff;
+            border-radius: 15px;
+            text-align: center;
+            display: none; /* Hidden by default */
+            font-size: 28px;
+            text-shadow: 0 0 10px #ff00ff;
+            pointer-events: auto; /* Allow clicks on this element */
+        }
+        #gameOverScreen h2 {
+            margin: 0 0 20px 0;
+            font-size: 48px;
+            color: #ff00ff;
+        }
+        #restartButton {
+            padding: 10px 20px;
+            font-size: 24px;
+            background-color: #ff00ff;
+            color: #000;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        #restartButton:hover {
+            background-color: #fff;
+            box-shadow: 0 0 20px #ff00ff;
+        }
     </style>
 </head>
 <body>
+    <div id="ui-container">
+        <div id="score">Score: 0</div>
+        <div id="gameOverScreen">
+            <h2>GAME OVER</h2>
+            <p>Final Score: <span id="finalScore">0</span></p>
+            <button id="restartButton">Restart</button>
+        </div>
+    </div>
+
     <script type="importmap">
         {
             "imports": {
@@ -22,161 +81,167 @@
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
         // --- Basic Setup ---
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setClearColor(0x111111);
+        renderer.setClearColor(0x000000);
         document.body.appendChild(renderer.domElement);
 
+        // --- Post-Processing (for the glow effect) ---
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0;
+        bloomPass.strength = 1.5; // Bloom intensity
+        bloomPass.radius = 0.5;
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
         // --- Lighting ---
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         scene.add(ambientLight);
-        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
         dirLight.position.set(5, 10, 7.5);
         scene.add(dirLight);
 
         // --- Game Board ---
         const gridSize = 20;
-        const gridHelper = new THREE.GridHelper(gridSize, gridSize, 0x444444, 0x444444);
+        const gridHelper = new THREE.GridHelper(gridSize, gridSize, 0x00ffff, 0x444444);
         gridHelper.position.y = -0.5;
         scene.add(gridHelper);
+        
+        // --- Starfield Background ---
+        const starGeometry = new THREE.BufferGeometry();
+        const starVertices = [];
+        for (let i = 0; i < 10000; i++) {
+            const x = (Math.random() - 0.5) * 2000;
+            const y = (Math.random() - 0.5) * 2000;
+            const z = (Math.random() - 0.5) * 2000;
+            starVertices.push(x, y, z);
+        }
+        starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3));
+        const starMaterial = new THREE.PointsMaterial({ color: 0x888888, size: 0.1 });
+        const stars = new THREE.Points(starGeometry, starMaterial);
+        scene.add(stars);
+
 
         // --- Game Objects ---
         const foodGeometry = new THREE.BoxGeometry(1, 1, 1);
-        const foodMaterial = new THREE.MeshLambertMaterial({ color: 0xff3333 });
+        const foodMaterial = new THREE.MeshStandardMaterial({ color: 0xff00ff, emissive: 0xff00ff, roughness: 0.2, metalness: 0.1 });
         const foodMesh = new THREE.Mesh(foodGeometry, foodMaterial);
         scene.add(foodMesh);
         
         const playerMeshes = {};
-
-        // --- Client-Side Prediction State ---
-        let pendingInputs = [];
-        let inputSequenceNumber = 0;
-        let localPlayerDirection = { x: 1, y: 0, z: 0 };
+        let myId = null;
+        let isDead = false;
 
         // --- WebSocket Connection ---
         const ws = new WebSocket('wss://sinny-snake-server.onrender.com');
-        let myId = null;
-
-        ws.onopen = () => console.log('Connected to the server!');
+        ws.onopen = () => console.log('Connected!');
         ws.onmessage = (event) => {
             const gameState = JSON.parse(event.data);
 
             if (gameState.type === 'assign_id') {
                 myId = gameState.id;
-                console.log(`I am player ${myId}`);
                 return;
             }
 
             if (gameState.type === 'game_update') {
-                // --- Server Reconciliation ---
-                if (myId && gameState.players[myId]) {
-                    const myServerState = gameState.players[myId];
-                    // The server has confirmed a position for our snake.
-                    // We can now safely set our local snake's mesh to this state.
-                    const myMeshArray = playerMeshes[myId] || [];
-                    for(let i = 0; i < myServerState.snake.length; i++) {
-                        if(myMeshArray[i]) {
-                           myMeshArray[i].position.set(myServerState.snake[i].x, myServerState.snake[i].y, myServerState.snake[i].z);
-                        }
-                    }
-
-                    // Remove inputs that the server has already processed.
-                    pendingInputs = pendingInputs.filter(input => input.sequence > myServerState.sequence);
-
-                    // Re-apply any inputs that happened after the server's last processed state.
-                    // This corrects our position if there was a prediction error.
-                    pendingInputs.forEach(input => {
-                        // (In a more complex game, we'd re-simulate the move here)
-                        localPlayerDirection = input.direction;
-                    });
-                }
-
-                // --- Render other players ---
-                for (const id in gameState.players) {
-                    if (id == myId) continue; // Skip our own snake
-
-                    const player = gameState.players[id];
-                    if (!playerMeshes[id]) playerMeshes[id] = [];
-                    
-                    const meshArray = playerMeshes[id];
-                    const snakeData = player.snake;
-
-                    while (meshArray.length < snakeData.length) {
-                        const geometry = new THREE.BoxGeometry(1, 1, 1);
-                        const material = new THREE.MeshLambertMaterial({ color: player.color });
-                        const segment = new THREE.Mesh(geometry, material);
-                        meshArray.push(segment);
-                        scene.add(segment);
-                    }
-                    while (meshArray.length > snakeData.length) {
-                        const segmentToRemove = meshArray.pop();
-                        scene.remove(segmentToRemove);
-                    }
-
-                    for (let i = 0; i < snakeData.length; i++) {
-                        meshArray[i].position.set(snakeData[i].x, snakeData[i].y, snakeData[i].z);
-                    }
-                }
-
-                // --- Update Food ---
-                foodMesh.position.set(gameState.food.x, gameState.food.y, gameState.food.z);
+                updateGameState(gameState);
             }
         };
 
+        function updateGameState(gameState) {
+            foodMesh.position.copy(gameState.food);
+            
+            const receivedPlayerIds = Object.keys(gameState.players);
+            for(const existingId in playerMeshes) {
+                if (!receivedPlayerIds.includes(existingId)) {
+                    playerMeshes[existingId].forEach(segment => scene.remove(segment));
+                    delete playerMeshes[existingId];
+                }
+            }
+
+            for (const id in gameState.players) {
+                const player = gameState.players[id];
+                
+                if (!playerMeshes[id]) playerMeshes[id] = [];
+                
+                const meshArray = playerMeshes[id];
+                const snakeData = player.snake;
+
+                while (meshArray.length < snakeData.length) {
+                    const geometry = new THREE.BoxGeometry(1, 1, 1);
+                    const material = new THREE.MeshStandardMaterial({ color: player.color, emissive: player.color, roughness: 0.2, metalness: 0.1 });
+                    const segment = new THREE.Mesh(geometry, material);
+                    meshArray.push(segment);
+                    scene.add(segment);
+                }
+                while (meshArray.length > snakeData.length) {
+                    const segmentToRemove = meshArray.pop();
+                    scene.remove(segmentToRemove);
+                }
+
+                for (let i = 0; i < snakeData.length; i++) {
+                    meshArray[i].position.copy(snakeData[i]);
+                }
+                
+                if (id == myId) {
+                    document.getElementById('score').innerText = `Score: ${player.score}`;
+                    if (player.isDead && !isDead) {
+                        isDead = true;
+                        document.getElementById('finalScore').innerText = player.score;
+                        document.getElementById('gameOverScreen').style.display = 'block';
+                    }
+                }
+            }
+        }
+
         // --- Controls ---
         window.addEventListener('keydown', (event) => {
+            if (isDead) return;
             let direction;
             switch (event.key.toLowerCase()) {
                 case 'arrowup': case 'w': direction = { x: 0, y: 0, z: -1 }; break;
                 case 'arrowdown': case 's': direction = { x: 0, y: 0, z: 1 }; break;
                 case 'arrowleft': case 'a': direction = { x: -1, y: 0, z: 0 }; break;
                 case 'arrowright': case 'd': direction = { x: 1, y: 0, z: 0 }; break;
+                case 'shift': ws.send(JSON.stringify({ type: 'sprint_change', isSprinting: true })); return;
                 default: return;
             }
-
-            // Client-side prediction: update local direction immediately
-            if(direction.x !== -localPlayerDirection.x || direction.z !== -localPlayerDirection.z) {
-                localPlayerDirection = direction;
-                const sequence = ++inputSequenceNumber;
-                pendingInputs.push({ sequence, direction });
-                ws.send(JSON.stringify({ type: 'direction_change', direction, sequence }));
+            ws.send(JSON.stringify({ type: 'direction_change', direction }));
+        });
+        
+        window.addEventListener('keyup', (event) => {
+            if (event.key.toLowerCase() === 'shift') {
+                ws.send(JSON.stringify({ type: 'sprint_change', isSprinting: false }));
             }
+        });
+        
+        // --- UI Events ---
+        document.getElementById('restartButton').addEventListener('click', () => {
+            ws.send(JSON.stringify({ type: 'restart_game' }));
+            document.getElementById('gameOverScreen').style.display = 'none';
+            isDead = false;
         });
 
         // --- Camera & Rendering ---
-        camera.position.set(0, 15, 12);
+        camera.position.set(0, 18, 14);
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
-        
-        const clock = new THREE.Clock();
-        let timeSinceLastMove = 0;
-        const moveInterval = 0.150; // 150ms
+        controls.target.set(0, 0, 0);
 
         function animate() {
             requestAnimationFrame(animate);
-            const delta = clock.getDelta();
-            timeSinceLastMove += delta;
-
-            // --- Move local player predictively ---
-            if (myId && playerMeshes[myId] && timeSinceLastMove >= moveInterval) {
-                timeSinceLastMove = 0;
-                const myMeshArray = playerMeshes[myId];
-                const headPos = myMeshArray[0].position.clone();
-
-                // Move all but the head to the position of the one in front
-                for(let i = myMeshArray.length - 1; i > 0; i--) {
-                    myMeshArray[i].position.copy(myMeshArray[i-1].position);
-                }
-                // Move the head
-                myMeshArray[0].position.add(localPlayerDirection);
-            }
-            
+            stars.rotation.y += 0.0001;
             controls.update();
-            renderer.render(scene, camera);
+            composer.render();
         }
         animate();
 
@@ -184,6 +249,7 @@
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
         });
     </script>
 </body>
