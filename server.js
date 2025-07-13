@@ -1,9 +1,19 @@
 const WebSocket = require('ws');
+const http = require('http');
 
 // Render provides the port via an environment variable.
-// We fall back to 8080 for local testing.
 const PORT = process.env.PORT || 8080;
-const wss = new WebSocket.Server({ port: PORT });
+
+// 1. Create a standard HTTP server.
+const server = http.createServer((req, res) => {
+    // This will handle Render's health checks with a success response.
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Server is alive and running.');
+});
+
+// 2. Attach the WebSocket server to the HTTP server.
+const wss = new WebSocket.Server({ server });
+
 
 // --- Game State (Managed by the Server) ---
 const gridSize = 20;
@@ -24,9 +34,8 @@ function placeFood() {
 // --- Server Connection Logic ---
 wss.on('connection', (ws) => {
     console.log('Client connected');
-    const clientId = Date.now() + Math.random(); // More robust unique ID
+    const clientId = Date.now() + Math.random(); 
 
-    // Create a new player
     players[clientId] = {
         id: clientId,
         snake: [ getRandomPosition() ],
@@ -93,4 +102,7 @@ function gameLoop() {
 placeFood();
 setInterval(gameLoop, 150);
 
-console.log(`WebSocket server started on port ${PORT}`);
+// 3. Start the HTTP server, which also starts the WebSocket server.
+server.listen(PORT, () => {
+    console.log(`HTTP and WebSocket server started on port ${PORT}`);
+});
