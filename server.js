@@ -29,11 +29,12 @@ function resetPlayer(player) {
     player.snake = [getRandomPosition()];
     player.score = 0;
     player.isDead = false;
+    player.direction = { x: 1, y: 0, z: 0 }; // Reset direction
 }
 
 wss.on('connection', (ws) => {
     console.log('Client connected');
-    const clientId = Date.now() + Math.random();
+    const clientId = Date.now() + Math.random(); 
 
     players[clientId] = {
         id: clientId,
@@ -44,6 +45,7 @@ wss.on('connection', (ws) => {
         score: 0,
         isSprinting: false,
         isDead: false,
+        lastMoveTime: 0
     };
 
     ws.send(JSON.stringify({ type: 'assign_id', id: clientId }));
@@ -57,14 +59,16 @@ wss.on('connection', (ws) => {
             if (data.type === 'direction_change') {
                 const newDirection = data.direction;
                 const currentDirection = player.direction;
-                if (newDirection.x !== -currentDirection.x || newDirection.z !== -currentDirection.z) {
+                if ((newDirection.x !== -currentDirection.x || newDirection.z !== 0) && 
+                    (newDirection.z !== -currentDirection.z || newDirection.x !== 0)) {
                     player.direction = newDirection;
-                    player.sequence = data.sequence;
                 }
             } else if (data.type === 'sprint_change') {
                 player.isSprinting = data.isSprinting;
             } else if (data.type === 'restart_game') {
-                resetPlayer(player);
+                if(player.isDead) {
+                   resetPlayer(player);
+                }
             }
         } catch (e) {
             console.error("Failed to parse message:", e);
@@ -84,8 +88,8 @@ function gameLoop() {
         const player = players[id];
         if (player.isDead) continue;
 
-        const moveInterval = player.isSprinting ? 75 : 150; // Sprint is twice as fast
-        if (Date.now() - (player.lastMoveTime || 0) < moveInterval) {
+        const moveInterval = player.isSprinting ? 75 : 150; 
+        if (Date.now() - player.lastMoveTime < moveInterval) {
             continue;
         }
         player.lastMoveTime = Date.now();
@@ -115,9 +119,8 @@ function gameLoop() {
             player.score++;
             placeFood();
         } else {
-            // Shrink snake while sprinting
             if (player.isSprinting && player.snake.length > 2 && sprintTick % 4 === 0) {
-                player.snake.pop(); // Shrink twice
+                player.snake.pop(); 
             }
             player.snake.pop();
         }
@@ -134,7 +137,8 @@ function gameLoop() {
 }
 
 placeFood();
-setInterval(gameLoop, 25); // Run loop more frequently for smoother sprint checks
+setInterval(gameLoop, 25); 
 
 server.listen(PORT, () => {
     console.log(`HTTP and WebSocket server started on port ${PORT}`);
+});
