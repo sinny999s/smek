@@ -13,7 +13,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            pointer-events: none; /* Let mouse events pass through to the canvas */
+            pointer-events: none;
             color: white;
         }
         #score {
@@ -33,10 +33,10 @@
             border: 2px solid #ff00ff;
             border-radius: 15px;
             text-align: center;
-            display: none; /* Hidden by default */
+            display: none;
             font-size: 28px;
             text-shadow: 0 0 10px #ff00ff;
-            pointer-events: auto; /* Allow clicks on this element */
+            pointer-events: auto;
         }
         #gameOverScreen h2 {
             margin: 0 0 20px 0;
@@ -93,11 +93,11 @@
         renderer.setClearColor(0x000000);
         document.body.appendChild(renderer.domElement);
 
-        // --- Post-Processing (for the glow effect) ---
+        // --- Post-Processing ---
         const renderScene = new RenderPass(scene, camera);
         const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
         bloomPass.threshold = 0;
-        bloomPass.strength = 1.5; // Bloom intensity
+        bloomPass.strength = 1.5;
         bloomPass.radius = 0.5;
         const composer = new EffectComposer(renderer);
         composer.addPass(renderScene);
@@ -110,26 +110,43 @@
         dirLight.position.set(5, 10, 7.5);
         scene.add(dirLight);
 
-        // --- Game Board ---
+        // --- Game Board (NEW solid grid plane) ---
         const gridSize = 20;
-        const gridHelper = new THREE.GridHelper(gridSize, gridSize, 0x00ffff, 0x444444);
-        gridHelper.position.y = -0.5;
-        scene.add(gridHelper);
-        
+        const gridTextureCanvas = document.createElement('canvas');
+        gridTextureCanvas.width = 512;
+        gridTextureCanvas.height = 512;
+        const context = gridTextureCanvas.getContext('2d');
+        context.fillStyle = '#001111';
+        context.fillRect(0, 0, 512, 512);
+        context.strokeStyle = '#00ffff';
+        context.lineWidth = 2;
+        for (let i = 0; i <= 512; i += 512 / gridSize) {
+            context.beginPath();
+            context.moveTo(i, 0);
+            context.lineTo(i, 512);
+            context.stroke();
+            context.beginPath();
+            context.moveTo(0, i);
+            context.lineTo(512, i);
+            context.stroke();
+        }
+        const gridTexture = new THREE.CanvasTexture(gridTextureCanvas);
+        const gridMaterial = new THREE.MeshBasicMaterial({ map: gridTexture });
+        const gridPlane = new THREE.Mesh(new THREE.PlaneGeometry(gridSize, gridSize), gridMaterial);
+        gridPlane.rotation.x = -Math.PI / 2;
+        gridPlane.position.y = -0.5;
+        scene.add(gridPlane);
+
         // --- Starfield Background ---
         const starGeometry = new THREE.BufferGeometry();
         const starVertices = [];
         for (let i = 0; i < 10000; i++) {
-            const x = (Math.random() - 0.5) * 2000;
-            const y = (Math.random() - 0.5) * 2000;
-            const z = (Math.random() - 0.5) * 2000;
-            starVertices.push(x, y, z);
+            starVertices.push((Math.random() - 0.5) * 2000, (Math.random() - 0.5) * 2000, (Math.random() - 0.5) * 2000);
         }
         starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3));
         const starMaterial = new THREE.PointsMaterial({ color: 0x888888, size: 0.1 });
         const stars = new THREE.Points(starGeometry, starMaterial);
         scene.add(stars);
-
 
         // --- Game Objects ---
         const foodGeometry = new THREE.BoxGeometry(1, 1, 1);
@@ -146,15 +163,8 @@
         ws.onopen = () => console.log('Connected!');
         ws.onmessage = (event) => {
             const gameState = JSON.parse(event.data);
-
-            if (gameState.type === 'assign_id') {
-                myId = gameState.id;
-                return;
-            }
-
-            if (gameState.type === 'game_update') {
-                updateGameState(gameState);
-            }
+            if (gameState.type === 'assign_id') myId = gameState.id;
+            if (gameState.type === 'game_update') updateGameState(gameState);
         };
 
         function updateGameState(gameState) {
@@ -176,10 +186,27 @@
                 const meshArray = playerMeshes[id];
                 const snakeData = player.snake;
 
+                // This is the fix for the invisible snake bug
+                if (meshArray.length === 0 && snakeData.length > 0) {
+                     for(let i = 0; i < snakeData.length; i++) {
+                        const geometry = new THREE.BoxGeometry(1, 1, 1);
+                        const material = new THREE.MeshStandardMaterial({ color: player.color, emissive: player.color, roughness: 0.2, metalness: 0.1 });
+                        const segment = new THREE.Mesh(geometry, material);
+                        segment.position.copy(snakeData[i]); // Set initial position
+                        meshArray.push(segment);
+                        scene.add(segment);
+                     }
+                }
+
                 while (meshArray.length < snakeData.length) {
+                    // Logic to add new segments (when snake eats food)
                     const geometry = new THREE.BoxGeometry(1, 1, 1);
                     const material = new THREE.MeshStandardMaterial({ color: player.color, emissive: player.color, roughness: 0.2, metalness: 0.1 });
                     const segment = new THREE.Mesh(geometry, material);
+                    // Add it at the tail position to avoid it popping in at the origin
+                    if (meshArray.length > 0) {
+                        segment.position.copy(meshArray[meshArray.length - 1].position);
+                    }
                     meshArray.push(segment);
                     scene.add(segment);
                 }
@@ -187,9 +214,15 @@
                     const segmentToRemove = meshArray.pop();
                     scene.remove(segmentToRemove);
                 }
-
+                
+                // Set the target positions for interpolation
                 for (let i = 0; i < snakeData.length; i++) {
-                    meshArray[i].position.copy(snakeData[i]);
+                    if (meshArray[i]) {
+                         if (!meshArray[i].userData.targetPosition) {
+                            meshArray[i].userData.targetPosition = new THREE.Vector3();
+                         }
+                         meshArray[i].userData.targetPosition.copy(snakeData[i]);
+                    }
                 }
                 
                 if (id == myId) {
@@ -237,8 +270,22 @@
         controls.enableDamping = true;
         controls.target.set(0, 0, 0);
 
+        const clock = new THREE.Clock();
         function animate() {
             requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+
+            // --- Smooth Interpolation Loop ---
+            for (const id in playerMeshes) {
+                const meshArray = playerMeshes[id];
+                for (const segment of meshArray) {
+                    if (segment.userData.targetPosition) {
+                        // Move the mesh smoothly towards its target position
+                        segment.position.lerp(segment.userData.targetPosition, delta * 15);
+                    }
+                }
+            }
+
             stars.rotation.y += 0.0001;
             controls.update();
             composer.render();
