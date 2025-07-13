@@ -20,8 +20,33 @@
             position: absolute;
             top: 20px;
             left: 20px;
-            font-size: 32px;
+            font-size: 36px;
+            font-weight: bold;
             text-shadow: 0 0 10px #fff, 0 0 20px #00ffff, 0 0 30px #00ffff;
+        }
+        #leaderboard {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            font-size: 18px;
+            background-color: rgba(0,0,0,0.5);
+            padding: 10px 15px;
+            border-radius: 10px;
+            border: 1px solid #00ffff;
+            text-align: right;
+        }
+        .leaderboard-entry {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+        }
+        .player-color-box {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 1px solid #fff;
+            margin-right: 10px;
+            vertical-align: middle;
         }
         #gameOverScreen {
             position: absolute;
@@ -62,6 +87,7 @@
 <body>
     <div id="ui-container">
         <div id="score">Score: 0</div>
+        <div id="leaderboard"></div>
         <div id="gameOverScreen">
             <h2>GAME OVER</h2>
             <p>Final Score: <span id="finalScore">0</span></p>
@@ -110,28 +136,34 @@
         dirLight.position.set(5, 10, 7.5);
         scene.add(dirLight);
 
-        // --- Game Board (NEW checkerboard plane) ---
+        // --- Game Board ---
         const gridSize = 20;
-        const gridTextureCanvas = document.createElement('canvas');
-        gridTextureCanvas.width = 512;
-        gridTextureCanvas.height = 512;
-        const context = gridTextureCanvas.getContext('2d');
-        const squareSize = gridTextureCanvas.width / gridSize;
-        const color1 = '#333333';
-        const color2 = '#444444';
-        for (let i = 0; i < gridSize; i++) {
-            for (let j = 0; j < gridSize; j++) {
-                context.fillStyle = (i + j) % 2 === 0 ? color1 : color2;
-                context.fillRect(i * squareSize, j * squareSize, squareSize, squareSize);
-            }
-        }
-        const gridTexture = new THREE.CanvasTexture(gridTextureCanvas);
-        const gridMaterial = new THREE.MeshStandardMaterial({ map: gridTexture, roughness: 0.8, metalness: 0.2 });
-        const gridPlane = new THREE.Mesh(new THREE.PlaneGeometry(gridSize, gridSize), gridMaterial);
+        const halfGrid = gridSize / 2;
+        const gridPlane = new THREE.Mesh(
+            new THREE.PlaneGeometry(gridSize, gridSize),
+            new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8, metalness: 0.2 })
+        );
         gridPlane.rotation.x = -Math.PI / 2;
         gridPlane.position.y = -0.5;
         scene.add(gridPlane);
 
+        // --- Bounding Walls (NEW) ---
+        const wallHeight = 2;
+        const wallThickness = 0.5;
+        const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, roughness: 0.1, metalness: 0.1 });
+        
+        const wallPositions = [
+            { x: 0, z: -halfGrid, scaleX: gridSize + wallThickness, scaleZ: wallThickness }, // Top
+            { x: 0, z: halfGrid, scaleX: gridSize + wallThickness, scaleZ: wallThickness },  // Bottom
+            { x: -halfGrid, z: 0, scaleX: wallThickness, scaleZ: gridSize + wallThickness }, // Left
+            { x: halfGrid, z: 0, scaleX: wallThickness, scaleZ: gridSize + wallThickness }   // Right
+        ];
+        
+        wallPositions.forEach(pos => {
+            const wall = new THREE.Mesh(new THREE.BoxGeometry(pos.scaleX, wallHeight, pos.scaleZ), wallMaterial);
+            wall.position.set(pos.x, 0, pos.z);
+            scene.add(wall);
+        });
 
         // --- Starfield Background ---
         const starGeometry = new THREE.BufferGeometry();
@@ -174,8 +206,19 @@
                 }
             }
 
+            const leaderboard = document.getElementById('leaderboard');
+            leaderboard.innerHTML = ''; // Clear old leaderboard
+
             for (const id in gameState.players) {
                 const player = gameState.players[id];
+                
+                // Update Leaderboard
+                const entry = document.createElement('div');
+                entry.className = 'leaderboard-entry';
+                const colorBox = `<div class="player-color-box" style="background-color: ${player.color};"></div>`;
+                const name = (id == myId) ? 'You' : `Player ${Math.floor(player.id % 1000)}`;
+                entry.innerHTML = `<span>${colorBox}${name}</span><span>${player.score}</span>`;
+                leaderboard.appendChild(entry);
                 
                 if (!playerMeshes[id]) playerMeshes[id] = [];
                 
