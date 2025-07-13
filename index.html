@@ -110,32 +110,28 @@
         dirLight.position.set(5, 10, 7.5);
         scene.add(dirLight);
 
-        // --- Game Board (NEW solid grid plane) ---
+        // --- Game Board (NEW checkerboard plane) ---
         const gridSize = 20;
         const gridTextureCanvas = document.createElement('canvas');
         gridTextureCanvas.width = 512;
         gridTextureCanvas.height = 512;
         const context = gridTextureCanvas.getContext('2d');
-        context.fillStyle = '#001111';
-        context.fillRect(0, 0, 512, 512);
-        context.strokeStyle = '#00ffff';
-        context.lineWidth = 2;
-        for (let i = 0; i <= 512; i += 512 / gridSize) {
-            context.beginPath();
-            context.moveTo(i, 0);
-            context.lineTo(i, 512);
-            context.stroke();
-            context.beginPath();
-            context.moveTo(0, i);
-            context.lineTo(512, i);
-            context.stroke();
+        const squareSize = gridTextureCanvas.width / gridSize;
+        const color1 = '#333333';
+        const color2 = '#444444';
+        for (let i = 0; i < gridSize; i++) {
+            for (let j = 0; j < gridSize; j++) {
+                context.fillStyle = (i + j) % 2 === 0 ? color1 : color2;
+                context.fillRect(i * squareSize, j * squareSize, squareSize, squareSize);
+            }
         }
         const gridTexture = new THREE.CanvasTexture(gridTextureCanvas);
-        const gridMaterial = new THREE.MeshBasicMaterial({ map: gridTexture });
+        const gridMaterial = new THREE.MeshStandardMaterial({ map: gridTexture, roughness: 0.8, metalness: 0.2 });
         const gridPlane = new THREE.Mesh(new THREE.PlaneGeometry(gridSize, gridSize), gridMaterial);
         gridPlane.rotation.x = -Math.PI / 2;
         gridPlane.position.y = -0.5;
         scene.add(gridPlane);
+
 
         // --- Starfield Background ---
         const starGeometry = new THREE.BufferGeometry();
@@ -186,24 +182,21 @@
                 const meshArray = playerMeshes[id];
                 const snakeData = player.snake;
 
-                // This is the fix for the invisible snake bug
                 if (meshArray.length === 0 && snakeData.length > 0) {
                      for(let i = 0; i < snakeData.length; i++) {
                         const geometry = new THREE.BoxGeometry(1, 1, 1);
                         const material = new THREE.MeshStandardMaterial({ color: player.color, emissive: player.color, roughness: 0.2, metalness: 0.1 });
                         const segment = new THREE.Mesh(geometry, material);
-                        segment.position.copy(snakeData[i]); // Set initial position
+                        segment.position.copy(snakeData[i]);
                         meshArray.push(segment);
                         scene.add(segment);
                      }
                 }
 
                 while (meshArray.length < snakeData.length) {
-                    // Logic to add new segments (when snake eats food)
                     const geometry = new THREE.BoxGeometry(1, 1, 1);
                     const material = new THREE.MeshStandardMaterial({ color: player.color, emissive: player.color, roughness: 0.2, metalness: 0.1 });
                     const segment = new THREE.Mesh(geometry, material);
-                    // Add it at the tail position to avoid it popping in at the origin
                     if (meshArray.length > 0) {
                         segment.position.copy(meshArray[meshArray.length - 1].position);
                     }
@@ -215,7 +208,6 @@
                     scene.remove(segmentToRemove);
                 }
                 
-                // Set the target positions for interpolation
                 for (let i = 0; i < snakeData.length; i++) {
                     if (meshArray[i]) {
                          if (!meshArray[i].userData.targetPosition) {
@@ -275,12 +267,10 @@
             requestAnimationFrame(animate);
             const delta = clock.getDelta();
 
-            // --- Smooth Interpolation Loop ---
             for (const id in playerMeshes) {
                 const meshArray = playerMeshes[id];
                 for (const segment of meshArray) {
                     if (segment.userData.targetPosition) {
-                        // Move the mesh smoothly towards its target position
                         segment.position.lerp(segment.userData.targetPosition, delta * 15);
                     }
                 }
