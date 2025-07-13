@@ -26,11 +26,13 @@ function placeFood() {
 }
 
 function resetPlayer(player) {
-    player.snake = [getRandomPosition()];
-    player.score = 0;
-    player.isDead = false;
-    player.direction = { x: 1, y: 0, z: 0 };
-    player.lastMoveTime = 0;
+    Object.assign(player, {
+        snake: [getRandomPosition()],
+        score: 0,
+        isDead: false,
+        direction: { x: 1, y: 0, z: 0 },
+        lastMoveTime: 0
+    });
 }
 
 wss.on('connection', (ws) => {
@@ -60,16 +62,12 @@ wss.on('connection', (ws) => {
             if (data.type === 'direction_change') {
                 const newDirection = data.direction;
                 const currentDirection = player.direction;
-                // Simplified and corrected 180-degree turn prevention
-                if (newDirection.x !== -currentDirection.x || newDirection.z !== -currentDirection.z) {
+                if ((newDirection.x !== -currentDirection.x || newDirection.z !== 0) && 
+                    (newDirection.z !== -currentDirection.z || newDirection.x !== 0)) {
                     player.direction = newDirection;
                 }
             } else if (data.type === 'sprint_change') {
                 player.isSprinting = data.isSprinting;
-            } else if (data.type === 'restart_game') {
-                if(player.isDead) {
-                   resetPlayer(player);
-                }
             }
         } catch (e) {
             console.error("Failed to parse message:", e);
@@ -85,20 +83,22 @@ wss.on('connection', (ws) => {
 let sprintTick = 0;
 function gameLoop() {
     sprintTick++;
-    const allPlayerPositions = new Map();
+    const allSegments = [];
     for (const id in players) {
-        players[id].snake.forEach(seg => {
-            const key = `${seg.x},${seg.z}`;
-            if (!allPlayerPositions.has(key)) {
-                allPlayerPositions.set(key, []);
-            }
-            allPlayerPositions.get(key).push(id);
-        });
+        if (!players[id].isDead) {
+            allSegments.push(...players[id].snake);
+        }
     }
 
     for (const id in players) {
         const player = players[id];
-        if (player.isDead) continue;
+        
+        if (player.isDead) {
+            if (Date.now() - player.deathTime > 2000) { // Respawn after 2 seconds
+                resetPlayer(player);
+            }
+            continue;
+        }
 
         const moveInterval = player.isSprinting ? 75 : 150; 
         if (Date.now() - player.lastMoveTime < moveInterval) {
@@ -111,17 +111,21 @@ function gameLoop() {
         head.z += player.direction.z;
 
         // Wall collision
-        if (head.x >= halfGrid || head.x <= -halfGrid || head.z >= halfGrid || head.z <= -halfGrid) {
+        if (head.x >= halfGrid || head.x < -halfGrid || head.z >= halfGrid || head.z < -halfGrid) {
             player.isDead = true;
+            player.deathTime = Date.now();
             continue;
         }
         
         // Self and other player collision
-        const posKey = `${head.x},${head.z}`;
-        if (allPlayerPositions.has(posKey)) {
-            player.isDead = true;
-            continue;
+        for(const segment of allSegments) {
+            if(Math.abs(head.x - segment.x) < 0.1 && Math.abs(head.z - segment.z) < 0.1) {
+                player.isDead = true;
+                player.deathTime = Date.now();
+                break;
+            }
         }
+        if(player.isDead) continue;
 
         player.snake.unshift(head);
 
