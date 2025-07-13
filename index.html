@@ -52,9 +52,10 @@
         
         const playerMeshes = {};
 
-        // --- Interpolation State ---
-        let serverStateBuffer = [];
-        const RENDER_DELAY = 100; // ms
+        // --- Client-Side Prediction State ---
+        let pendingInputs = [];
+        let inputSequenceNumber = 0;
+        let localPlayerDirection = { x: 1, y: 0, z: 0 };
 
         // --- WebSocket Connection ---
         const ws = new WebSocket('wss://sinny-snake-server.onrender.com');
@@ -63,14 +64,66 @@
         ws.onopen = () => console.log('Connected to the server!');
         ws.onmessage = (event) => {
             const gameState = JSON.parse(event.data);
+
             if (gameState.type === 'assign_id') {
                 myId = gameState.id;
                 console.log(`I am player ${myId}`);
                 return;
             }
+
             if (gameState.type === 'game_update') {
-                // Instead of rendering immediately, we push the state to a buffer.
-                serverStateBuffer.push({timestamp: Date.now(), state: gameState});
+                // --- Server Reconciliation ---
+                if (myId && gameState.players[myId]) {
+                    const myServerState = gameState.players[myId];
+                    // The server has confirmed a position for our snake.
+                    // We can now safely set our local snake's mesh to this state.
+                    const myMeshArray = playerMeshes[myId] || [];
+                    for(let i = 0; i < myServerState.snake.length; i++) {
+                        if(myMeshArray[i]) {
+                           myMeshArray[i].position.set(myServerState.snake[i].x, myServerState.snake[i].y, myServerState.snake[i].z);
+                        }
+                    }
+
+                    // Remove inputs that the server has already processed.
+                    pendingInputs = pendingInputs.filter(input => input.sequence > myServerState.sequence);
+
+                    // Re-apply any inputs that happened after the server's last processed state.
+                    // This corrects our position if there was a prediction error.
+                    pendingInputs.forEach(input => {
+                        // (In a more complex game, we'd re-simulate the move here)
+                        localPlayerDirection = input.direction;
+                    });
+                }
+
+                // --- Render other players ---
+                for (const id in gameState.players) {
+                    if (id == myId) continue; // Skip our own snake
+
+                    const player = gameState.players[id];
+                    if (!playerMeshes[id]) playerMeshes[id] = [];
+                    
+                    const meshArray = playerMeshes[id];
+                    const snakeData = player.snake;
+
+                    while (meshArray.length < snakeData.length) {
+                        const geometry = new THREE.BoxGeometry(1, 1, 1);
+                        const material = new THREE.MeshLambertMaterial({ color: player.color });
+                        const segment = new THREE.Mesh(geometry, material);
+                        meshArray.push(segment);
+                        scene.add(segment);
+                    }
+                    while (meshArray.length > snakeData.length) {
+                        const segmentToRemove = meshArray.pop();
+                        scene.remove(segmentToRemove);
+                    }
+
+                    for (let i = 0; i < snakeData.length; i++) {
+                        meshArray[i].position.set(snakeData[i].x, snakeData[i].y, snakeData[i].z);
+                    }
+                }
+
+                // --- Update Food ---
+                foodMesh.position.set(gameState.food.x, gameState.food.y, gameState.food.z);
             }
         };
 
@@ -84,7 +137,14 @@
                 case 'arrowright': case 'd': direction = { x: 1, y: 0, z: 0 }; break;
                 default: return;
             }
-            ws.send(JSON.stringify({ type: 'direction_change', direction: direction }));
+
+            // Client-side prediction: update local direction immediately
+            if(direction.x !== -localPlayerDirection.x || direction.z !== -localPlayerDirection.z) {
+                localPlayerDirection = direction;
+                const sequence = ++inputSequenceNumber;
+                pendingInputs.push({ sequence, direction });
+                ws.send(JSON.stringify({ type: 'direction_change', direction, sequence }));
+            }
         });
 
         // --- Camera & Rendering ---
@@ -93,82 +153,26 @@
         controls.enableDamping = true;
         
         const clock = new THREE.Clock();
+        let timeSinceLastMove = 0;
+        const moveInterval = 0.150; // 150ms
 
         function animate() {
             requestAnimationFrame(animate);
             const delta = clock.getDelta();
+            timeSinceLastMove += delta;
 
-            // --- Interpolation Logic ---
-            const renderTime = Date.now() - RENDER_DELAY;
-            
-            // Find the two server updates we want to interpolate between
-            let fromState = null;
-            let toState = null;
-            for(let i = serverStateBuffer.length - 1; i >= 0; i--) {
-                if(serverStateBuffer[i].timestamp <= renderTime) {
-                    fromState = serverStateBuffer[i];
-                    toState = serverStateBuffer[i+1];
-                    break;
+            // --- Move local player predictively ---
+            if (myId && playerMeshes[myId] && timeSinceLastMove >= moveInterval) {
+                timeSinceLastMove = 0;
+                const myMeshArray = playerMeshes[myId];
+                const headPos = myMeshArray[0].position.clone();
+
+                // Move all but the head to the position of the one in front
+                for(let i = myMeshArray.length - 1; i > 0; i--) {
+                    myMeshArray[i].position.copy(myMeshArray[i-1].position);
                 }
-            }
-
-            // Clean up old states
-            if(serverStateBuffer.length > 20) {
-                serverStateBuffer.splice(0, serverStateBuffer.length - 20);
-            }
-
-            if(fromState && toState) {
-                const timeDiff = toState.timestamp - fromState.timestamp;
-                const renderDiff = renderTime - fromState.timestamp;
-                const t = Math.min(renderDiff / timeDiff, 1.0); // Interpolation factor (0.0 to 1.0)
-
-                // --- Update Food (can snap, doesn't need lerp) ---
-                foodMesh.position.set(fromState.state.food.x, fromState.state.food.y, fromState.state.food.z);
-
-                // --- Update Snakes with Interpolation ---
-                const receivedPlayerIds = Object.keys(fromState.state.players);
-                
-                for(const existingId in playerMeshes) {
-                    if (!receivedPlayerIds.includes(existingId)) {
-                        playerMeshes[existingId].forEach(segment => scene.remove(segment));
-                        delete playerMeshes[existingId];
-                    }
-                }
-
-                for (const id in fromState.state.players) {
-                    const playerFrom = fromState.state.players[id];
-                    const playerTo = toState.state.players[id];
-
-                    if (!playerTo) continue; // Skip if player doesn't exist in the next state
-
-                    if (!playerMeshes[id]) playerMeshes[id] = [];
-                    
-                    const meshArray = playerMeshes[id];
-                    const snakeDataFrom = playerFrom.snake;
-                    const snakeDataTo = playerTo.snake;
-
-                    // Sync mesh array length
-                    while (meshArray.length < snakeDataFrom.length) {
-                        const geometry = new THREE.BoxGeometry(1, 1, 1);
-                        const material = new THREE.MeshLambertMaterial({ color: playerFrom.color });
-                        const segment = new THREE.Mesh(geometry, material);
-                        meshArray.push(segment);
-                        scene.add(segment);
-                    }
-                    while (meshArray.length > snakeDataFrom.length) {
-                        const segmentToRemove = meshArray.pop();
-                        scene.remove(segmentToRemove);
-                    }
-
-                    // Interpolate positions of all meshes
-                    for (let i = 0; i < meshArray.length; i++) {
-                        if(snakeDataFrom[i] && snakeDataTo[i]) {
-                            const fromPos = new THREE.Vector3(snakeDataFrom[i].x, snakeDataFrom[i].y, snakeDataFrom[i].z);
-                            const toPos = new THREE.Vector3(snakeDataTo[i].x, snakeDataTo[i].y, snakeDataTo[i].z);
-                            meshArray[i].position.lerpVectors(fromPos, toPos, t);
-                        }
-                    }
-                }
+                // Move the head
+                myMeshArray[0].position.add(localPlayerDirection);
             }
             
             controls.update();
