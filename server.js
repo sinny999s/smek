@@ -16,8 +16,8 @@ const players = {};
 let food = {};
 
 function getRandomPosition() {
-    const x = Math.floor(Math.random() * gridSize) - halfGrid;
-    const z = Math.floor(Math.random() * gridSize) - halfGrid;
+    const x = Math.floor(Math.random() * gridSize) - halfGrid + 0.5;
+    const z = Math.floor(Math.random() * gridSize) - halfGrid + 0.5;
     return { x, y: 0, z };
 }
 
@@ -29,7 +29,8 @@ function resetPlayer(player) {
     player.snake = [getRandomPosition()];
     player.score = 0;
     player.isDead = false;
-    player.direction = { x: 1, y: 0, z: 0 }; // Reset direction
+    player.direction = { x: 1, y: 0, z: 0 };
+    player.lastMoveTime = 0;
 }
 
 wss.on('connection', (ws) => {
@@ -38,10 +39,10 @@ wss.on('connection', (ws) => {
 
     players[clientId] = {
         id: clientId,
+        name: `Player ${Math.floor(clientId % 1000)}`,
         snake: [getRandomPosition()],
         direction: { x: 1, y: 0, z: 0 },
         color: `hsl(${Math.random() * 360}, 100%, 70%)`,
-        sequence: 0,
         score: 0,
         isSprinting: false,
         isDead: false,
@@ -59,8 +60,8 @@ wss.on('connection', (ws) => {
             if (data.type === 'direction_change') {
                 const newDirection = data.direction;
                 const currentDirection = player.direction;
-                if ((newDirection.x !== -currentDirection.x || newDirection.z !== 0) && 
-                    (newDirection.z !== -currentDirection.z || newDirection.x !== 0)) {
+                // Simplified and corrected 180-degree turn prevention
+                if (newDirection.x !== -currentDirection.x || newDirection.z !== -currentDirection.z) {
                     player.direction = newDirection;
                 }
             } else if (data.type === 'sprint_change') {
@@ -84,6 +85,17 @@ wss.on('connection', (ws) => {
 let sprintTick = 0;
 function gameLoop() {
     sprintTick++;
+    const allPlayerPositions = new Map();
+    for (const id in players) {
+        players[id].snake.forEach(seg => {
+            const key = `${seg.x},${seg.z}`;
+            if (!allPlayerPositions.has(key)) {
+                allPlayerPositions.set(key, []);
+            }
+            allPlayerPositions.get(key).push(id);
+        });
+    }
+
     for (const id in players) {
         const player = players[id];
         if (player.isDead) continue;
@@ -99,27 +111,25 @@ function gameLoop() {
         head.z += player.direction.z;
 
         // Wall collision
-        if (head.x >= halfGrid || head.x < -halfGrid || head.z >= halfGrid || head.z < -halfGrid) {
+        if (head.x >= halfGrid || head.x <= -halfGrid || head.z >= halfGrid || head.z <= -halfGrid) {
             player.isDead = true;
             continue;
         }
         
-        // Self collision
-        for(let i = 1; i < player.snake.length; i++) {
-            if(head.x === player.snake[i].x && head.z === player.snake[i].z) {
-                player.isDead = true;
-                break;
-            }
+        // Self and other player collision
+        const posKey = `${head.x},${head.z}`;
+        if (allPlayerPositions.has(posKey)) {
+            player.isDead = true;
+            continue;
         }
-        if(player.isDead) continue;
 
         player.snake.unshift(head);
 
-        if (head.x === food.x && head.z === food.z) {
+        if (Math.abs(head.x - food.x) < 0.5 && Math.abs(head.z - food.z) < 0.5) {
             player.score++;
             placeFood();
         } else {
-            if (player.isSprinting && player.snake.length > 2 && sprintTick % 4 === 0) {
+            if (player.isSprinting && player.snake.length > 3 && sprintTick % 3 === 0) {
                 player.snake.pop(); 
             }
             player.snake.pop();
@@ -137,7 +147,7 @@ function gameLoop() {
 }
 
 placeFood();
-setInterval(gameLoop, 25); 
+setInterval(gameLoop, 30); 
 
 server.listen(PORT, () => {
     console.log(`HTTP and WebSocket server started on port ${PORT}`);
