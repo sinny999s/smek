@@ -138,7 +138,6 @@
         
         const playerMeshes = {};
         let myId = null;
-        let isDead = false;
 
         // --- WebSocket Connection ---
         const ws = new WebSocket('wss://sinny-snake-server.onrender.com');
@@ -177,10 +176,16 @@
                 const meshArray = playerMeshes[id];
                 const snakeData = player.snake;
 
+                // --- BUG FIX: Immediate visual feedback on death ---
                 if (player.isDead && meshArray.length > 0) {
                     createParticleEffect(meshArray[0].position, player.color, 100);
                     meshArray.forEach(segment => scene.remove(segment));
-                    playerMeshes[id] = [];
+                    playerMeshes[id] = []; // Clear the local mesh array
+                    if (id === myId) {
+                        // If it's our snake that died, send restart immediately
+                        ws.send(JSON.stringify({ type: 'restart_game' }));
+                    }
+                    continue; // Skip the rest of the logic for this dead player
                 }
 
                 while (meshArray.length < snakeData.length) {
@@ -201,23 +206,12 @@
                 
                 if (id == myId) {
                     document.getElementById('score').innerText = `Score: ${player.score}`;
-                    // If the server says we are dead, but we don't know it yet
-                    if (player.isDead && !isDead) {
-                        isDead = true;
-                        // Automatically send a restart request
-                        ws.send(JSON.stringify({ type: 'restart_game' }));
-                    }
-                    // If the server says we are alive, but we think we are dead (after respawn)
-                    if (!player.isDead && isDead) {
-                        isDead = false;
-                    }
                 }
             }
         }
 
         // --- Controls ---
         window.addEventListener('keydown', (event) => {
-            if (isDead) return;
             let direction;
             switch (event.key.toLowerCase()) {
                 case 'arrowup': case 'w': direction = { x: 0, y: 0, z: -1 }; break;
